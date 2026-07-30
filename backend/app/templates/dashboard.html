@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · IG Automation OS{% endblock %}
+{% block eyebrow %}Console / Dashboard{% endblock %}
+{% block heading %}Create Publishing Campaign{% endblock %}
+
+{% block content %}
+<form id="campaign-form" class="campaign-form" data-testid="campaign-form" autocomplete="off">
+
+  <div class="form-grid">
+
+    <!-- LEFT COLUMN -->
+    <div class="form-col">
+
+      <section class="card" data-testid="section-content-type">
+        <header class="card-head">
+          <div class="card-index">01</div>
+          <div>
+            <h2 class="card-title">Content Type</h2>
+            <p class="card-sub">Determines accepted formats and available options.</p>
+          </div>
+        </header>
+        <div class="segmented" role="radiogroup" aria-label="Content type">
+          <label class="segmented-item" data-testid="content-type-reel">
+            <input type="radio" name="content_type" value="reel" checked />
+            <div class="segmented-body">
+              <span class="segmented-title">Reel</span>
+              <span class="segmented-sub">Vertical video · .mp4 .mov .webm</span>
+            </div>
+          </label>
+          <label class="segmented-item" data-testid="content-type-static">
+            <input type="radio" name="content_type" value="static" />
+            <div class="segmented-body">
+              <span class="segmented-title">Static Post</span>
+              <span class="segmented-sub">Single image · .jpg .png .webp</span>
+            </div>
+          </label>
+        </div>
+      </section>
+
+      <section class="card" data-testid="section-uploads">
+        <header class="card-head">
+          <div class="card-index">02</div>
+          <div>
+            <h2 class="card-title">Bulk Content Upload</h2>
+            <p class="card-sub">Drop or select many files at once. Each can be removed individually.</p>
+          </div>
+        </header>
+
+        <label id="dropzone" class="dropzone" data-testid="dropzone">
+          <input id="file-input" type="file" multiple hidden data-testid="file-input" />
+          <div class="dropzone-inner">
+            <div class="dropzone-glyph">↥</div>
+            <div class="dropzone-title">Drop files here or <span class="link-accent">browse</span></div>
+            <div class="dropzone-sub" id="dropzone-hint">Reel: .mp4 .mov .webm · Static: .jpg .png .webp</div>
+          </div>
+        </label>
+
+        <div class="upload-meta">
+          <span class="meta-count"><span id="file-count" data-testid="file-count">0</span> file<span id="file-count-s">s</span> selected</span>
+          <button type="button" class="btn-ghost btn-sm" id="clear-all" data-testid="clear-all">Clear all</button>
+        </div>
+
+        <ul id="file-list" class="file-list" data-testid="file-list"></ul>
+      </section>
+
+      <section class="card" data-testid="section-caption">
+        <header class="card-head">
+          <div class="card-index">03</div>
+          <div>
+            <h2 class="card-title">Caption</h2>
+            <p class="card-sub">Applied to every post in this campaign.</p>
+          </div>
+        </header>
+        <textarea
+          id="caption"
+          name="caption"
+          class="textarea"
+          rows="5"
+          maxlength="2200"
+          placeholder="Write your caption. Hashtags, mentions, line breaks — all supported."
+          data-testid="caption-input"></textarea>
+        <div class="textarea-meta">
+          <span><span id="caption-count" data-testid="caption-count">0</span> / 2200</span>
+          <span class="muted">Per-file captions can be added in a later phase.</span>
+        </div>
+      </section>
+
+      <section class="card" id="section-audio" data-testid="section-audio">
+        <header class="card-head">
+          <div class="card-index">04</div>
+          <div>
+            <h2 class="card-title">Instagram Music</h2>
+            <p class="card-sub">Reel only. Original audio is never lowered or muted.</p>
+          </div>
+        </header>
+        <div class="segmented segmented--compact" role="radiogroup" aria-label="Audio mode">
+          <label class="segmented-item" data-testid="audio-original">
+            <input type="radio" name="audio_mode" value="original" checked />
+            <div class="segmented-body">
+              <span class="segmented-title">Original Audio Only</span>
+              <span class="segmented-sub">Use the video's own audio as-is</span>
+            </div>
+          </label>
+          <label class="segmented-item" data-testid="audio-ig">
+            <input type="radio" name="audio_mode" value="ig_music" />
+            <div class="segmented-body">
+              <span class="segmented-title">Add Instagram Music</span>
+              <span class="segmented-sub">Search a song from the IG library</span>
+            </div>
+          </label>
+        </div>
+        <div id="music-search-wrap" class="music-search hidden">
+          <label for="music_search" class="field-label">Song search</label>
+          <input
+            type="text"
+            id="music_search"
+            name="music_search"
+            class="input"
+            placeholder="e.g. Blinding Lights — The Weeknd"
+            data-testid="music-search" />
+          <div class="hint">Stored with the campaign. Selection automation handled in a later phase.</div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div class="form-col">
+
+      <section class="card" data-testid="section-quantity">
+        <header class="card-head">
+          <div class="card-index">05</div>
+          <div>
+            <h2 class="card-title">Account Quantity</h2>
+            <p class="card-sub">How many managed accounts should receive this campaign.</p>
+          </div>
+        </header>
+        <div class="quantity-grid" data-testid="quantity-presets">
+          {% for q in [100, 200, 300, 500, 1000] %}
+          <button type="button" class="qty-btn" data-quantity="{{ q }}" data-testid="qty-{{ q }}">
+            <span class="qty-num">{{ q }}</span>
+            <span class="qty-label">accounts</span>
+          </button>
+          {% endfor %}
+        </div>
+        <label class="field-label">Custom Quantity</label>
+        <input
+          type="number"
+          id="account_quantity"
+          name="account_quantity"
+          class="input input--big"
+          min="1"
+          max="10000"
+          placeholder="Enter a number, e.g. 250"
+          data-testid="account-quantity-input" />
+      </section>
+
+      <section class="card" data-testid="section-distribution">
+        <header class="card-head">
+          <div class="card-index">06</div>
+          <div>
+            <h2 class="card-title">Distribution Mode</h2>
+            <p class="card-sub">Controls how files map to accounts.</p>
+          </div>
+        </header>
+        <div class="dist-list" role="radiogroup" aria-label="Distribution mode">
+          <label class="dist-item" data-testid="dist-same">
+            <input type="radio" name="distribution_mode" value="same" checked />
+            <div class="dist-body">
+              <div class="dist-title">Same Content → All Accounts</div>
+              <div class="dist-sub">1 file × N accounts. First file posted everywhere.</div>
+            </div>
+          </label>
+          <label class="dist-item" data-testid="dist-one-per">
+            <input type="radio" name="distribution_mode" value="one_per_account" />
+            <div class="dist-body">
+              <div class="dist-title">One File Per Account</div>
+              <div class="dist-sub">Video 1 → Account 1, Video 2 → Account 2 …</div>
+            </div>
+          </label>
+          <label class="dist-item" data-testid="dist-round">
+            <input type="radio" name="distribution_mode" value="round_robin" />
+            <div class="dist-body">
+              <div class="dist-title">Round Robin</div>
+              <div class="dist-sub">Cycle files across the account pool.</div>
+            </div>
+          </label>
+        </div>
+      </section>
+
+      <section class="card summary-card" data-testid="section-summary">
+        <header class="card-head">
+          <div class="card-index">07</div>
+          <div>
+            <h2 class="card-title">Campaign Summary</h2>
+            <p class="card-sub">Review before dispatching to the queue.</p>
+          </div>
+        </header>
+        <dl class="summary">
+          <div><dt>Content Type</dt><dd id="sum-content" data-testid="sum-content">Reel</dd></div>
+          <div><dt>Files</dt><dd id="sum-files" data-testid="sum-files">0</dd></div>
+          <div><dt>Accounts</dt><dd id="sum-accounts" data-testid="sum-accounts">0</dd></div>
+          <div><dt>Distribution</dt><dd id="sum-dist" data-testid="sum-dist">Same → All</dd></div>
+          <div><dt>Audio</dt><dd id="sum-audio" data-testid="sum-audio">Original</dd></div>
+          <div id="sum-song-row" class="hidden"><dt>Song</dt><dd id="sum-song" data-testid="sum-song">—</dd></div>
+          <div class="summary-highlight"><dt>Estimated Jobs</dt><dd id="sum-jobs" data-testid="sum-jobs">0</dd></div>
+        </dl>
+
+        <button type="submit" class="btn-primary btn-lg" id="start-btn" data-testid="start-posting">
+          <span>Start Posting</span>
+          <span class="btn-arrow">→</span>
+        </button>
+        <div class="hint hint--center">A confirmation modal will appear before the campaign is created.</div>
+      </section>
+
+    </div>
+  </div>
+</form>
+
+<!-- Confirmation Modal -->
+<div class="modal hidden" id="confirm-modal" data-testid="confirm-modal" role="dialog" aria-modal="true">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card">
+    <div class="modal-eyebrow">Confirm Campaign</div>
+    <h3 class="modal-title">Dispatch this campaign to the queue?</h3>
+    <p class="modal-body">The system will select available accounts and schedule jobs based on the distribution mode. Publishing automation runs in a later phase.</p>
+    <dl class="summary summary--compact" id="modal-summary"></dl>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="modal-cancel" data-testid="modal-cancel">Cancel</button>
+      <button type="button" class="btn-primary" id="modal-confirm" data-testid="modal-confirm">
+        <span>Confirm & Create</span><span class="btn-arrow">→</span>
+      </button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/api/static/js/dashboard.js"></script>
+{% endblock %}

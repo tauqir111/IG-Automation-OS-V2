@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Logs · IG Automation OS{% endblock %}
+{% block eyebrow %}Console / Logs{% endblock %}
+{% block heading %}Activity Logs{% endblock %}
+
+{% block content %}
+<div class="page-actions">
+  <div class="filter-cluster" data-testid="log-filters">
+    <button class="chip chip--active" data-level="" data-testid="log-filter-all">All</button>
+    <button class="chip" data-level="INFO" data-testid="log-filter-info">Info</button>
+    <button class="chip chip--success" data-level="SUCCESS" data-testid="log-filter-success">Success</button>
+    <button class="chip chip--warn" data-level="WARNING" data-testid="log-filter-warning">Warning</button>
+    <button class="chip chip--danger" data-level="ERROR" data-testid="log-filter-error">Error</button>
+  </div>
+  <button class="btn-ghost btn-sm" id="refresh-logs" data-testid="refresh-logs">Refresh</button>
+</div>
+
+<div class="log-terminal" data-testid="log-terminal">
+  <div id="log-list" class="log-list"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/api/static/js/logs.js"></script>
+{% endblock %}

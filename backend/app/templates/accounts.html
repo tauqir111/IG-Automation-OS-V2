@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Accounts · IG Automation OS{% endblock %}
+{% block eyebrow %}Console / Accounts{% endblock %}
+{% block heading %}Managed Account Pool{% endblock %}
+
+{% block content %}
+<div id="env-banner" class="env-banner hidden" data-testid="env-banner"></div>
+
+<div class="stat-grid" data-testid="account-stats">
+  <div class="stat-card"><div class="stat-eyebrow">Total</div><div class="stat-value" id="stat-total">0</div></div>
+  <div class="stat-card stat-card--accent"><div class="stat-eyebrow">Available</div><div class="stat-value" id="stat-available">0</div></div>
+  <div class="stat-card"><div class="stat-eyebrow">Busy</div><div class="stat-value" id="stat-busy">0</div></div>
+  <div class="stat-card stat-card--warn"><div class="stat-eyebrow">Session Expired</div><div class="stat-value" id="stat-expired">0</div></div>
+  <div class="stat-card stat-card--muted"><div class="stat-eyebrow">Disabled</div><div class="stat-value" id="stat-disabled">0</div></div>
+</div>
+
+<div class="page-actions">
+  <p class="muted">Each account is bound to its own persistent Playwright profile. Passwords, cookies and session IDs are never stored or displayed — only kept inside the browser profile on disk.</p>
+  <div class="add-account">
+    <input type="text" id="new-account-name" class="input" placeholder="account_name" data-testid="new-account-name" />
+    <button type="button" class="btn-primary btn-sm" id="add-account-btn" data-testid="add-account-btn">
+      <span>Add Account</span><span class="btn-arrow">+</span>
+    </button>
+  </div>
+</div>
+
+<div class="table-card">
+  <div class="table-scroll">
+    <table class="data-table" data-testid="accounts-table">
+      <thead>
+        <tr>
+          <th class="col-id">ID</th>
+          <th>Account</th>
+          <th>Session</th>
+          <th>Status</th>
+          <th class="col-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="accounts-tbody" data-testid="accounts-tbody">
+        <tr><td colspan="5" class="empty-cell">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/api/static/js/accounts.js"></script>
+{% endblock %}

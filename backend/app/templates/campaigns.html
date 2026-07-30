@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Campaigns · IG Automation OS{% endblock %}
+{% block eyebrow %}Console / Campaigns{% endblock %}
+{% block heading %}Campaigns{% endblock %}
+
+{% block content %}
+<div class="page-actions">
+  <div class="filter-cluster" data-testid="campaign-filters">
+    <button class="chip chip--active" data-filter="all" data-testid="filter-all">All</button>
+    <button class="chip" data-filter="draft" data-testid="filter-draft">Draft</button>
+    <button class="chip" data-filter="queued" data-testid="filter-queued">Queued</button>
+    <button class="chip" data-filter="running" data-testid="filter-running">Running</button>
+    <button class="chip" data-filter="completed" data-testid="filter-completed">Completed</button>
+  </div>
+  <a href="/api/" class="btn-primary btn-sm" data-testid="new-campaign-btn">
+    <span>New Campaign</span><span class="btn-arrow">→</span>
+  </a>
+</div>
+
+<div class="table-card">
+  <div class="table-scroll">
+    <table class="data-table" data-testid="campaigns-table">
+      <thead>
+        <tr>
+          <th class="col-id">ID</th>
+          <th>Content</th>
+          <th>Files</th>
+          <th>Accounts</th>
+          <th>Distribution</th>
+          <th>Status</th>
+          <th>Progress</th>
+          <th>Success</th>
+          <th>Failed</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody id="campaigns-tbody" data-testid="campaigns-tbody">
+        <tr><td colspan="10" class="empty-cell">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/api/static/js/campaigns.js"></script>
+{% endblock %}
