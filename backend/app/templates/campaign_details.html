@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Campaign #{{ campaign.id }} · IG Automation OS{% endblock %}
+{% block eyebrow %}Console / Campaigns / #{{ campaign.id }}{% endblock %}
+{% block heading %}Campaign #{{ campaign.id }}{% endblock %}
+
+{% block content %}
+<div class="page-actions">
+  <a href="/api/campaigns" class="btn-ghost btn-sm" data-testid="back-to-campaigns">← All campaigns</a>
+  <div class="lifecycle-cluster" data-testid="lifecycle-actions">
+    <button class="btn-ghost btn-sm" data-action="pause" data-testid="action-pause">Pause</button>
+    <button class="btn-ghost btn-sm" data-action="resume" data-testid="action-resume">Resume</button>
+    <button class="btn-ghost btn-sm" data-action="stop" data-testid="action-stop">Stop</button>
+    <button class="btn-ghost btn-sm" data-action="retry" data-testid="action-retry">Retry Failed</button>
+  </div>
+</div>
+
+<div class="detail-grid">
+  <section class="card">
+    <h2 class="card-title">Configuration</h2>
+    <dl class="summary" id="detail-config" data-testid="detail-config">
+      <div><dt>Status</dt><dd><span id="d-status" class="status-tag">—</span></dd></div>
+      <div><dt>Content Type</dt><dd id="d-content">—</dd></div>
+      <div><dt>Files</dt><dd id="d-files">—</dd></div>
+      <div><dt>Requested Accounts</dt><dd id="d-accounts">—</dd></div>
+      <div><dt>Distribution</dt><dd id="d-dist">—</dd></div>
+      <div><dt>Audio Mode</dt><dd id="d-audio">—</dd></div>
+      <div id="d-song-row" class="hidden"><dt>Song</dt><dd id="d-song">—</dd></div>
+      <div><dt>Created</dt><dd id="d-created">—</dd></div>
+    </dl>
+    <div class="caption-block">
+      <div class="field-label">Caption</div>
+      <pre id="d-caption" class="caption-pre" data-testid="detail-caption">—</pre>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 class="card-title">Progress</h2>
+    <div class="progress-outer" data-testid="progress-outer">
+      <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+    </div>
+    <div class="progress-label" data-testid="progress-label">
+      <span id="progress-done">0</span> / <span id="progress-total">0</span> completed
+    </div>
+    <ul class="stat-list">
+      <li><span class="stat-num" id="s-queued" data-testid="stat-queued">0</span><span>Queued</span></li>
+      <li><span class="stat-num" id="s-processing" data-testid="stat-processing">0</span><span>Processing</span></li>
+      <li><span class="stat-num stat-num--success" id="s-successful" data-testid="stat-successful">0</span><span>Successful</span></li>
+      <li><span class="stat-num stat-num--fail" id="s-failed" data-testid="stat-failed">0</span><span>Failed</span></li>
+    </ul>
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head card-head--simple">
+    <h2 class="card-title">Files</h2>
+    <span class="muted" id="file-total">0 file(s)</span>
+  </div>
+  <ul class="file-list file-list--static" id="detail-files" data-testid="detail-files"></ul>
+</section>
+
+<section class="card">
+  <div class="card-head card-head--simple">
+    <h2 class="card-title">Jobs</h2>
+    <span class="muted">Paginated in Phase 3</span>
+  </div>
+  <div class="empty-block" data-testid="jobs-empty">
+    Job records will appear here once the queue and workers are enabled (Phase 3).
+  </div>
+</section>
+
+<script>window.CAMPAIGN_ID = {{ campaign.id }};</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/api/static/js/campaign_details.js"></script>
+{% endblock %}

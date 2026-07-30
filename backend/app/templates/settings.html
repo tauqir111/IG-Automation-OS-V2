@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Settings · IG Automation OS{% endblock %}
+{% block eyebrow %}Console / Settings{% endblock %}
+{% block heading %}System Settings{% endblock %}
+
+{% block content %}
+<form id="settings-form" class="settings-form" data-testid="settings-form">
+  <section class="card">
+    <h2 class="card-title">General</h2>
+    <div class="field-grid">
+      <div class="field">
+        <label class="field-label">Concurrent Workers</label>
+        <input type="number" name="concurrent_workers" min="1" max="64" class="input" data-testid="setting-workers" />
+        <div class="hint">Start low. Recommended: 2–4.</div>
+      </div>
+      <div class="field">
+        <label class="field-label">Delay Between Jobs (seconds)</label>
+        <input type="number" name="delay_between_jobs_seconds" min="0" max="3600" class="input" data-testid="setting-delay" />
+      </div>
+      <div class="field">
+        <label class="field-label">Maximum Retries</label>
+        <input type="number" name="max_retries" min="0" max="10" class="input" data-testid="setting-retries" />
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 class="card-title">Browser</h2>
+    <div class="field-grid">
+      <div class="field">
+        <label class="field-label">Browser Mode</label>
+        <select name="browser_headless" class="input" data-testid="setting-headless">
+          <option value="true">Headless</option>
+          <option value="false">Visible</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label">Browser Timeout (seconds)</label>
+        <input type="number" name="browser_timeout_seconds" min="10" max="600" class="input" data-testid="setting-timeout" />
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 class="card-title">Storage</h2>
+    <div class="field-grid">
+      <div class="field field--wide">
+        <label class="field-label">Profiles Directory</label>
+        <input type="text" name="profiles_dir" class="input mono" data-testid="setting-profiles-dir" />
+      </div>
+      <div class="field field--wide">
+        <label class="field-label">Upload / Content Directory</label>
+        <input type="text" name="uploads_dir" class="input mono" data-testid="setting-uploads-dir" />
+      </div>
+      <div class="field field--wide">
+        <label class="field-label">Logs Directory</label>
+        <input type="text" name="logs_dir" class="input mono" data-testid="setting-logs-dir" />
+      </div>
+    </div>
+  </section>
+
+  <div class="settings-actions">
+    <button type="submit" class="btn-primary" data-testid="save-settings">
+      <span>Save Settings</span><span class="btn-arrow">→</span>
+    </button>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script src="/api/static/js/settings.js"></script>
+{% endblock %}

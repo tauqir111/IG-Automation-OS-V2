@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}IG Automation OS{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/api/static/css/styles.css" />
+</head>
+<body>
+  <div class="app-shell" data-testid="app-shell">
+    <aside class="sidebar" data-testid="sidebar">
+      <div class="brand">
+        <div class="brand-mark">
+          <span class="brand-dot"></span>
+          <span class="brand-dot brand-dot--mid"></span>
+          <span class="brand-dot brand-dot--sm"></span>
+        </div>
+        <div class="brand-text">
+          <div class="brand-name">IG Automation</div>
+          <div class="brand-sub">OS · v0.1</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <a href="/api/" class="nav-item {% if active=='dashboard' %}is-active{% endif %}" data-testid="nav-dashboard">
+          <span class="nav-icon">▤</span><span>Dashboard</span>
+        </a>
+        <a href="/api/campaigns" class="nav-item {% if active=='campaigns' %}is-active{% endif %}" data-testid="nav-campaigns">
+          <span class="nav-icon">◈</span><span>Campaigns</span>
+        </a>
+        <a href="/api/accounts" class="nav-item {% if active=='accounts' %}is-active{% endif %}" data-testid="nav-accounts">
+          <span class="nav-icon">◉</span><span>Accounts</span>
+        </a>
+        <a href="/api/logs" class="nav-item {% if active=='logs' %}is-active{% endif %}" data-testid="nav-logs">
+          <span class="nav-icon">≡</span><span>Logs</span>
+        </a>
+        <a href="/api/settings" class="nav-item {% if active=='settings' %}is-active{% endif %}" data-testid="nav-settings">
+          <span class="nav-icon">✦</span><span>Settings</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="footer-label">Internal Ops Tool</div>
+        <div class="footer-sub">Not affiliated with Instagram</div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div class="topbar-title">
+          <span class="topbar-eyebrow">{% block eyebrow %}Console{% endblock %}</span>
+          <h1 class="topbar-heading">{% block heading %}IG Automation OS{% endblock %}</h1>
+        </div>
+        <div class="status-cluster">
+          <div class="status-pill" data-testid="system-status">
+            <span class="status-dot"></span>
+            <span>SYSTEM ONLINE</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="page" data-testid="page-{{ active }}">
+        {% block content %}{% endblock %}
+      </section>
+    </main>
+  </div>
+
+  <div id="toast-root" class="toast-root" aria-live="polite" data-testid="toast-root"></div>
+
+  <script src="/api/static/js/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
