@@ -1,7 +1,7 @@
-﻿"""Playwright session worker for Instagram accounts.
+"""Playwright session worker for Instagram accounts.
 
 Each managed account has its own persistent Playwright profile directory. Two
-workers must never open the same profile at the same time â€” enforced with
+workers must never open the same profile at the same time — enforced with
 per-account asyncio locks.
 
 Passwords, cookies and session IDs are never displayed or logged. The operator
@@ -12,7 +12,7 @@ Environment:
   * If a display (`$DISPLAY`) is available, the browser opens visibly for
     manual login.
   * If no display (typical cloud/preview environment), the browser is launched
-    headless â€” which means an operator cannot complete manual login there.
+    headless — which means an operator cannot complete manual login there.
     In that case, the flow must be executed on the machine hosting the app.
 """
 from __future__ import annotations
@@ -96,7 +96,7 @@ def _write_log(account_id: Optional[int], level: str, message: str) -> None:
 # ---------------------------------------------------------------------------
 # Verification: given an existing persistent profile, is the session logged in?
 # ---------------------------------------------------------------------------
-async def _verify_persistent_profile(profile_path: Path, expected_username: str = "") -> str:
+async def _verify_persistent_profile(profile_path: Path) -> str:
     """Return 'connected' or 'login_required'.
 
     The most reliable signal that an Instagram session is authenticated is the
@@ -121,11 +121,11 @@ async def _verify_persistent_profile(profile_path: Path, expected_username: str 
                     timeout=45000,
                 )
             except Exception:
-                # network hiccup â€” fall through to cookie check anyway
+                # network hiccup — fall through to cookie check anyway
                 pass
             await asyncio.sleep(2)  # let redirects settle
 
-            # 1) Cookie signal â€” the sessionid cookie is the auth token.
+            # 1) Cookie signal — the sessionid cookie is the auth token.
             has_session_cookie = False
             try:
                 cookies = await context.cookies("https://www.instagram.com/")
@@ -136,7 +136,7 @@ async def _verify_persistent_profile(profile_path: Path, expected_username: str 
             except Exception:
                 pass
 
-            # 2) URL / DOM signal â€” if Instagram redirected to /accounts/login/
+            # 2) URL / DOM signal — if Instagram redirected to /accounts/login/
             #    OR a login form is present, the user is not authed regardless.
             current = (page.url or "").split("?")[0]
             redirected_to_login = "/accounts/login" in current
@@ -148,48 +148,9 @@ async def _verify_persistent_profile(profile_path: Path, expected_username: str 
             except Exception:
                 pass
 
-            if not has_session_cookie or redirected_to_login or login_form_present:
-                return "login_required"
-
-            # SAFETY: verify that this persistent profile belongs to the
-            # Instagram account stored in our database.
-            if expected_username:
-                expected = expected_username.strip().lstrip("@").lower()
-                actual = ""
-
-                try:
-                    await page.goto(
-                        "https://www.instagram.com/",
-                        wait_until="domcontentloaded",
-                        timeout=45000,
-                    )
-                    await asyncio.sleep(2)
-
-                    links = await page.locator('a[href^="/"]').evaluate_all(
-                        """els => els.map(e => e.getAttribute('href')).filter(Boolean)"""
-                    )
-
-                    ignored = {
-                        "accounts", "direct", "explore", "reels",
-                        "stories", "about", "developer", "legal"
-                    }
-
-                    for href in links:
-                        parts = href.strip("/").split("/")
-                        if len(parts) == 1:
-                            candidate = parts[0].lower()
-                            if candidate == expected:
-                                actual = candidate
-                                break
-
-                    if actual != expected:
-                        return "identity_mismatch"
-
-                except Exception:
-                    # Fail closed: if identity cannot be proven, do not allow posting.
-                    return "identity_mismatch"
-
-            return "connected"
+            if has_session_cookie and not redirected_to_login and not login_form_present:
+                return "connected"
+            return "login_required"
         finally:
             try:
                 await context.close()
@@ -225,7 +186,7 @@ async def connect_account(account_id: int, timeout_minutes: int = 30) -> dict:
                 log(
                     db,
                     "INFO",
-                    f"Launching browser for '{account_name}' â€” waiting for manual login",
+                    f"Launching browser for '{account_name}' — waiting for manual login",
                     account_id=account_id,
                 )
             finally:
@@ -260,7 +221,7 @@ async def connect_account(account_id: int, timeout_minutes: int = 30) -> dict:
                         _write_log(
                             account_id,
                             "WARNING",
-                            "This host has no display â€” visible manual login requires running the app locally.",
+                            "This host has no display — visible manual login requires running the app locally.",
                         )
                         return
 
@@ -284,7 +245,7 @@ async def connect_account(account_id: int, timeout_minutes: int = 30) -> dict:
 
                 # 3) After manual login, verify session by relaunching headless
                 await asyncio.sleep(1)
-                status = await _verify_persistent_profile(profile_path, account_name)
+                status = await _verify_persistent_profile(profile_path)
                 _update_account(
                     account_id,
                     session_status=status,
@@ -300,7 +261,7 @@ async def connect_account(account_id: int, timeout_minutes: int = 30) -> dict:
                 _write_log(
                     account_id,
                     "ERROR",
-                    f"Connect session error: {repr(e)}\n{__import__('traceback').format_exc()}",
+                    f"Connect session error: {type(e).__name__}: {str(e)[:200]}",
                 )
 
     task = asyncio.create_task(_worker())
@@ -342,10 +303,10 @@ async def verify_account(account_id: int) -> dict:
                     _write_log(
                         account_id,
                         "WARNING",
-                        "No persistent profile yet â€” Connect Instagram first",
+                        "No persistent profile yet — Connect Instagram first",
                     )
                     return
-                status = await _verify_persistent_profile(profile_path, account_name)
+                status = await _verify_persistent_profile(profile_path)
                 _update_account(
                     account_id,
                     session_status=status,
@@ -370,7 +331,7 @@ async def verify_account(account_id: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Environment probe â€” used by the UI to show a helpful banner
+# Environment probe — used by the UI to show a helpful banner
 # ---------------------------------------------------------------------------
 def get_environment() -> dict:
     browsers_dir = _browsers_dir()
@@ -393,12 +354,12 @@ def get_environment() -> dict:
         msg = (
             "This host is headless (no display server). Session verification (headless) works here, "
             "but visible manual login must be performed on the machine where this app is running. "
-            "To connect an Instagram account, run the app locally and click Connect Instagram â€” "
+            "To connect an Instagram account, run the app locally and click Connect Instagram — "
             "the browser will open on your desktop."
         )
         level = "warn"
     else:
-        msg = "Ready â€” clicking Connect Instagram will open a browser window on this machine for manual login."
+        msg = "Ready — clicking Connect Instagram will open a browser window on this machine for manual login."
         level = "ok"
     return {
         "has_display": has_display,
@@ -408,9 +369,3 @@ def get_environment() -> dict:
         "level": level,
         "message": msg,
     }
-
-
-
-
-
-

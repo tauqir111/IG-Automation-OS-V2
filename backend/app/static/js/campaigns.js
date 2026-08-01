@@ -37,7 +37,7 @@
       if (!d) return '';
       const counts = d.job_counts || {};
       const total = counts.total || 0;
-      const done = (counts.successful || 0) + (counts.failed || 0);
+      const done = (counts.success || 0) + (counts.failed || 0) + (counts.action_required || 0);
       const pct = total ? Math.round((done / total) * 100) : 0;
       return `
         <tr onclick="location.href='/api/campaigns/${d.id}'" style="cursor:pointer" data-testid="campaign-row-${d.id}">
@@ -48,7 +48,7 @@
           <td>${distLabel(d.distribution_mode)}</td>
           <td><span class="status-tag is-${d.status}">${d.status}</span></td>
           <td>${total ? `${pct}%` : '—'}</td>
-          <td>${counts.successful || 0}</td>
+          <td>${counts.success || 0}</td>
           <td>${counts.failed || 0}</td>
           <td>${fmtDate(d.created_at)}</td>
         </tr>

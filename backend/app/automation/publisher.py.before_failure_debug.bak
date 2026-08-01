@@ -1,0 +1,547 @@
+﻿"""Instagram publishing engine (Phase 2).
+
+Uses each account's *existing* persistent Playwright profile (from Phase 1
+`browser_session.py`). No password / cookie handling here â€” we assume the
+profile is already logged in from a prior Connect Instagram flow.
+
+Publishing flow (Reel):
+    open persistent context â†’ instagram.com â†’ verify sessionid cookie â†’
+    click "Create" â†’ click "Reel" (if submenu present) â†’
+    set_input_files() on the hidden file input â†’
+    wait for upload processing â†’ click "Next" up to 3Ã— â†’
+    fill caption textarea â†’ click "Share" â†’
+    wait for the "shared" confirmation.
+
+Static Post is the same flow minus the Reel submenu click.
+
+Everything about Instagram's DOM is best-effort â€” the selectors are wrapped
+in fallback lists so a small IG UI shuffle is unlikely to break the whole
+publisher. On failure we save a debug screenshot to
+`backend/logs/screenshots/` (git-ignored).
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import re
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, Tuple
+
+from ..database import SessionLocal, BASE_DIR
+from ..models import Account, Campaign, CampaignFile, Job
+from ..services.logger import log
+from . import browser_session
+
+try:
+    from playwright.async_api import (  # noqa: F401
+        Page,
+        BrowserContext,
+        TimeoutError as PWTimeoutError,
+        async_playwright,
+    )
+    PLAYWRIGHT_AVAILABLE = True
+except Exception:  # pragma: no cover
+    PLAYWRIGHT_AVAILABLE = False
+
+
+SCREENSHOTS_DIR = BASE_DIR / "logs" / "screenshots"
+SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Phrases in an exception message that mean "Instagram wants human action" â€”
+# we must NEVER retry these; account is parked until an operator reconnects it.
+ACTION_REQUIRED_MARKERS = (
+    "checkpoint", "challenge", "suspicious", "login_required",
+    "two-factor", "2fa", "restricted", "action required",
+)
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def _job_snapshot(job_id: int):
+    """Read-only snapshot of a job + its campaign + account + file."""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            return None
+        campaign = db.query(Campaign).filter(Campaign.id == job.campaign_id).first()
+        account = db.query(Account).filter(Account.id == job.account_id).first() if job.account_id else None
+        cfile = db.query(CampaignFile).filter(CampaignFile.id == job.file_id).first() if job.file_id else None
+        return {
+            "job": {
+                "id": job.id, "campaign_id": job.campaign_id,
+                "account_id": job.account_id, "file_id": job.file_id,
+                "attempt_count": job.attempt_count, "status": job.status,
+            },
+            "campaign": {
+                "id": campaign.id, "content_type": campaign.content_type,
+                "caption": campaign.caption, "audio_mode": campaign.audio_mode,
+            } if campaign else None,
+            "account": {
+                "id": account.id, "name": account.account_name,
+                "profile_path": account.profile_path,
+                "session_status": account.session_status,
+            } if account else None,
+            "file": {
+                "id": cfile.id, "path": cfile.stored_path,
+                "filename": cfile.filename, "file_type": cfile.file_type,
+            } if cfile else None,
+        }
+    finally:
+        db.close()
+
+
+def _update_job(job_id: int, **fields):
+    db = SessionLocal()
+    try:
+        j = db.query(Job).filter(Job.id == job_id).first()
+        if not j:
+            return
+        for k, v in fields.items():
+            setattr(j, k, v)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _update_account(account_id: int, **fields):
+    db = SessionLocal()
+    try:
+        a = db.query(Account).filter(Account.id == account_id).first()
+        if not a:
+            return
+        for k, v in fields.items():
+            setattr(a, k, v)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _log(level: str, message: str, *, campaign_id: Optional[int] = None, account_id: Optional[int] = None):
+    db = SessionLocal()
+    try:
+        log(db, level, message, campaign_id=campaign_id, account_id=account_id)
+    finally:
+        db.close()
+
+
+def _screenshot_path(job_id: int, tag: str) -> Path:
+    ts = _now().strftime("%Y%m%d_%H%M%S")
+    return SCREENSHOTS_DIR / f"job_{job_id}_{tag}_{ts}.png"
+
+
+async def _safe_screenshot(page, path: Path):
+    try:
+        await page.screenshot(path=str(path), full_page=False)
+    except Exception:
+        pass
+
+
+def _classify_error(message: str) -> str:
+    """Return 'action_required' | 'transient'."""
+    lo = (message or "").lower()
+    for m in ACTION_REQUIRED_MARKERS:
+        if m in lo:
+            return "action_required"
+    return "transient"
+
+
+# ---------------------------------------------------------------------------
+# Selector helpers â€” try each candidate until one matches, then interact.
+# ---------------------------------------------------------------------------
+async def _first_visible(page, selectors, timeout_ms: int = 8000):
+    deadline = asyncio.get_event_loop().time() + (timeout_ms / 1000.0)
+    last_err = None
+    while asyncio.get_event_loop().time() < deadline:
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.is_visible():
+                    return loc
+            except Exception as e:
+                last_err = e
+        await asyncio.sleep(0.25)
+    raise TimeoutError(f"None of {selectors!r} became visible in {timeout_ms}ms: {last_err}")
+
+
+async def _click_first(page, selectors, *, timeout_ms: int = 8000):
+    loc = await _first_visible(page, selectors, timeout_ms=timeout_ms)
+    await loc.click()
+    return loc
+
+
+# ---------------------------------------------------------------------------
+# Session verification (protected route + sessionid cookie)
+# ---------------------------------------------------------------------------
+async def _verify_session_on_context(context, expected_username: str = "") -> str:
+    """Return 'connected' or 'login_required' using an existing context."""
+    page = context.pages[0] if context.pages else await context.new_page()
+    try:
+        await page.goto("https://www.instagram.com/accounts/edit/",
+                        wait_until="domcontentloaded", timeout=45000)
+    except Exception:
+        pass
+    await asyncio.sleep(2)
+    has_session = False
+    try:
+        cookies = await context.cookies("https://www.instagram.com/")
+        has_session = any(c.get("name") == "sessionid" and c.get("value") for c in cookies)
+    except Exception:
+        pass
+    current = (page.url or "").split("?")[0]
+    on_login = "/accounts/login" in current
+    login_form = False
+    try:
+        login_form = bool(await page.query_selector('input[name="username"]'))
+    except Exception:
+        pass
+    if not has_session or on_login or login_form:
+        return "login_required"
+
+    # SAFETY LOCK: prove this browser is logged into the expected account.
+    if expected_username:
+        expected = expected_username.strip().lstrip("@").lower()
+        try:
+            await page.goto(
+                "https://www.instagram.com/",
+                wait_until="domcontentloaded",
+                timeout=45000,
+            )
+            await asyncio.sleep(2)
+
+            links = await page.locator('a[href^="/"]').evaluate_all(
+                """els => els.map(e => e.getAttribute('href')).filter(Boolean)"""
+            )
+
+            identity_confirmed = False
+            for href in links:
+                parts = href.strip("/").split("/")
+                if len(parts) == 1 and parts[0].lower() == expected:
+                    identity_confirmed = True
+                    break
+
+            if not identity_confirmed:
+                return "identity_mismatch"
+
+        except Exception:
+            # Fail closed. No proven identity = absolutely no publishing.
+            return "identity_mismatch"
+
+    return "connected"
+
+
+# ---------------------------------------------------------------------------
+# The publishing flow itself
+# ---------------------------------------------------------------------------
+async def _perform_publish(page, content_type: str, media_path: str, caption: str, job_id: int) -> None:
+    """Assumes we are on https://www.instagram.com/ and logged in.
+
+    Raises on failure. On success, returns cleanly.
+    """
+    # Navigate to feed if not already there
+    if "instagram.com" not in (page.url or ""):
+        await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=45000)
+
+    _log("INFO", f"Job #{job_id} â€” opening Create")
+    # ---- 1) Click "Create" (New post) ---------------------------------------
+    # Click the actual clickable parent instead of the New post SVG itself.
+    create = page.locator(
+        'a:has(svg[aria-label="New post"]), '
+        'div[role="button"]:has(svg[aria-label="New post"])'
+    ).first
+
+    if await create.count() == 0 or not await create.is_visible():
+        raise RuntimeError("Visible Create/New post control not found")
+
+    await create.click(timeout=15000)
+    await asyncio.sleep(1)
+
+    # ---- 2) If Reel, click the "Reel" submenu; else pick "Post" -------------
+    if content_type == "reel":
+        try:
+            await _click_first(page, [
+                'a[href*="/reels/create"]',
+                'span:has-text("Reel")',
+                'div[role="button"]:has-text("Reel")',
+                '[aria-label="Reel"]',
+            ], timeout_ms=4000)
+            await asyncio.sleep(1)
+        except Exception:
+            # No submenu (some IG accounts land straight in Create modal
+            # that auto-detects video as a Reel). Continue.
+            pass
+    else:
+        try:
+            await _click_first(page, [
+                'span:has-text("Post")',
+                'div[role="button"]:has-text("Post")',
+                '[aria-label="Post"]',
+            ], timeout_ms=4000)
+            await asyncio.sleep(1)
+        except Exception:
+            pass
+
+    # ---- 3) Upload the file via hidden input --------------------------------
+    _log("INFO", f"Job #{job_id} â€” uploading media ({Path(media_path).name})")
+    file_input = None
+    for sel in ('input[type="file"][accept*="video"]',
+                'input[type="file"][accept*="image"]',
+                'input[type="file"]'):
+        loc = page.locator(sel).first
+        try:
+            if await loc.count() > 0:
+                file_input = loc
+                break
+        except Exception:
+            continue
+    if file_input is None:
+        raise RuntimeError("Could not locate the Instagram file input")
+    await file_input.set_input_files(media_path)
+
+    # ---- 4) Wait for upload processing to complete --------------------------
+    _log("INFO", f"Job #{job_id} â€” waiting for media processing")
+    # "Next" being clickable is a reliable signal that IG finished processing
+    # the upload and moved us into the crop/adjust step.
+    next_selectors = [
+        'div[role="button"]:has-text("Next")',
+        'button:has-text("Next")',
+    ]
+    try:
+        await _first_visible(page, next_selectors, timeout_ms=120000)  # up to 2min for large videos
+    except Exception:
+        # Sometimes IG shows "Ok" or a similar dialog first (e.g. reel aspect
+        # ratio). Try to click those away first.
+        for sel in ['div[role="button"]:has-text("OK")', 'div[role="button"]:has-text("Ok")']:
+            try:
+                await page.locator(sel).first.click(timeout=1500)
+            except Exception:
+                pass
+        await _first_visible(page, next_selectors, timeout_ms=45000)
+
+    _log("INFO", f"Job #{job_id} â€” processing complete, moving through Next screens")
+    # ---- 5) Click "Next" up to 3 times (crop â†’ filter â†’ caption) ------------
+    # Move through Instagram edit screens until the caption field appears.
+    caption_selectors = [
+        'div[aria-label="Write a caption..."]',
+        'div[aria-label*="caption" i][role="textbox"]',
+        'textarea[aria-label*="caption" i]',
+    ]
+
+    for step in range(5):
+        # Stop immediately once we have actually reached the caption screen.
+        caption_found = False
+        for sel in caption_selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    caption_found = True
+                    break
+            except Exception:
+                pass
+
+        if caption_found:
+            break
+
+        try:
+            await _click_first(page, next_selectors, timeout_ms=10000)
+            await asyncio.sleep(1.5)
+        except Exception:
+            break
+    # ---- 6) Enter caption ---------------------------------------------------
+    _log("INFO", f"Job #{job_id} â€” entering caption")
+    caption_loc = await _first_visible(page, [
+        'div[aria-label="Write a caption..."]',
+        'div[aria-label*="caption" i][role="textbox"]',
+        'textarea[aria-label*="caption" i]',
+    ], timeout_ms=15000)
+    await caption_loc.click()
+    if caption:
+        # `type` more reliably fires IG's onChange than `fill` for contenteditable
+        await caption_loc.type(caption, delay=6)
+
+    # ---- 7) Click "Share" ---------------------------------------------------
+    _log("INFO", f"Job #{job_id} â€” clicking Share")
+    # DEBUG: capture Instagram state immediately before Share
+    try:
+        visible_buttons = await page.locator('button:visible, div[role="button"]:visible').all_inner_texts()
+        _log("INFO", f"Job #{job_id} - PRE-SHARE URL={page.url} BUTTONS={visible_buttons[:30]}")
+        await _safe_screenshot(page, _screenshot_path(job_id, "pre_share"))
+    except Exception as debug_error:
+        _log("WARNING", f"Job #{job_id} - PRE-SHARE debug failed: {debug_error}")
+
+    # Click the exact visible Share control
+    share_candidates = page.get_by_text("Share", exact=True)
+    share = None
+    for i in range(await share_candidates.count() - 1, -1, -1):
+        candidate = share_candidates.nth(i)
+        try:
+            if await candidate.is_visible() and await candidate.is_enabled():
+                share = candidate
+                break
+        except Exception:
+            continue
+
+    if share is None:
+        raise RuntimeError("No visible and enabled exact Share control found")
+
+    await share.click(timeout=8000)
+
+    # ---- 8) Wait for Instagram to confirm publication -----------------------
+    _log("INFO", f"Job #{job_id} â€” waiting for Instagram confirmationâ€¦")
+    confirmation_patterns = [
+        re.compile(r"your\s+(post|reel)\s+has\s+been\s+shared", re.I),
+        re.compile(r"shared\s+to\s+your\s+profile", re.I),
+    ]
+    # Only explicit Instagram confirmation counts as success.
+    # Dialog disappearing alone is NOT proof that the post was published.
+    deadline = asyncio.get_event_loop().time() + 180
+    while asyncio.get_event_loop().time() < deadline:
+        body_text = ""
+        try:
+            body_text = (await page.locator("body").inner_text(timeout=1500)) or ""
+        except Exception:
+            pass
+
+        if any(p.search(body_text) for p in confirmation_patterns):
+            _log("SUCCESS", f"Job #{job_id} - Instagram confirmed publication")
+            return
+
+        await asyncio.sleep(2)
+
+    raise RuntimeError("ACTION REQUIRED: Share was clicked but Instagram publication could not be confirmed. Check profile before retrying to avoid duplicate post.")
+
+
+# ---------------------------------------------------------------------------
+# Public entry point: attempt one publish for one job.
+# ---------------------------------------------------------------------------
+async def publish_job(job_id: int) -> dict:
+    """One attempt. Returns:
+        { "outcome": "success" | "action_required" | "transient_failure",
+          "message": str }
+
+    NEVER retries â€” the queue handles retry logic. This function is
+    responsible for the DB status transitions inside a single attempt.
+    """
+    if not PLAYWRIGHT_AVAILABLE:
+        _update_job(job_id, status="failed",
+                    error_message="Playwright not installed on this host")
+        return {"outcome": "transient_failure", "message": "Playwright missing"}
+
+    snap = _job_snapshot(job_id)
+    if not snap or not snap["campaign"] or not snap["account"] or not snap["file"]:
+        _update_job(job_id, status="failed",
+                    error_message="Job is missing campaign / account / file")
+        return {"outcome": "transient_failure", "message": "invalid job"}
+
+    campaign = snap["campaign"]
+    account = snap["account"]
+    cfile = snap["file"]
+    job = snap["job"]
+    account_id = account["id"]
+    campaign_id = campaign["id"]
+
+    # ---- Sanity: media file exists on disk ---------------------------------
+    if not Path(cfile["path"]).exists():
+        _update_job(job_id, status="failed",
+                    error_message=f"Media file not found: {cfile['path']}")
+        _log("ERROR", f"Job #{job_id} failed â€” media file missing", campaign_id=campaign_id, account_id=account_id)
+        return {"outcome": "transient_failure", "message": "media missing"}
+
+    # ---- Mark RUNNING + attempt++ ------------------------------------------
+    _update_job(job_id, status="running",
+                attempt_count=job["attempt_count"] + 1,
+                started_at=_now(), error_message="")
+    _log("INFO", f"Job #{job_id} RUNNING (attempt {job['attempt_count'] + 1})",
+         campaign_id=campaign_id, account_id=account_id)
+    _log("INFO", f"Account @{account['name']} reserved", campaign_id=campaign_id, account_id=account_id)
+
+    # ---- Acquire the per-account lock so nothing else touches this profile
+    lock = browser_session._lock_for(account_id)
+
+    async with lock:
+        page = None
+        context = None
+        try:
+            from playwright.async_api import async_playwright
+            _log("INFO", f"Job #{job_id} â€” launching persistent profile",
+                 campaign_id=campaign_id, account_id=account_id)
+            async with async_playwright() as p:
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir=account["profile_path"],
+                    headless=not browser_session._has_display(),
+                    viewport={"width": 1280, "height": 800},
+                    args=["--no-first-run", "--no-default-browser-check"],
+                )
+                # 1) Verify session
+                session_state = await _verify_session_on_context(context, account["name"])
+                if session_state != "connected":
+                    # Do NOT retry â€” account needs manual reconnect
+                    _update_account(account_id, session_status="login_required")
+                    _update_job(job_id, status="action_required",
+                                error_message="Instagram session invalid â€” reconnect this account",
+                                completed_at=_now())
+                    _log("WARNING",
+                         f"Job #{job_id} ACTION_REQUIRED â€” session not authenticated for @{account['name']}",
+                         campaign_id=campaign_id, account_id=account_id)
+                    return {"outcome": "action_required", "message": "session invalid"}
+
+                _log("INFO", f"Job #{job_id} â€” Instagram loaded, session verified",
+                     campaign_id=campaign_id, account_id=account_id)
+
+                page = context.pages[0] if context.pages else await context.new_page()
+
+                # 2) Do the publish
+                await _perform_publish(
+                    page=page,
+                    content_type=campaign["content_type"],
+                    media_path=cfile["path"],
+                    caption=campaign["caption"] or "",
+                    job_id=job_id,
+                )
+
+            # 3) Success â€” bookkeeping
+            _update_job(job_id, status="success", completed_at=_now(), error_message="")
+            _update_account(account_id, last_used_at=_now(), last_successful_post_at=_now())
+            _log("SUCCESS", f"Job #{job_id} SUCCESS", campaign_id=campaign_id, account_id=account_id)
+            _log("INFO", f"Account @{account['name']} released", campaign_id=campaign_id, account_id=account_id)
+            return {"outcome": "success", "message": "ok"}
+
+        except Exception as e:
+            tb = traceback.format_exc()
+            err_msg = f"{type(e).__name__}: {str(e)[:400]}"
+            # Save a screenshot before we lose the page
+            if page is not None:
+                await _safe_screenshot(page, _screenshot_path(job_id, "failure"))
+            # Close context if still open
+            try:
+                if context is not None:
+                    await context.close()
+            except Exception:
+                pass
+            kind = _classify_error(err_msg + " " + tb)
+            if kind == "action_required":
+                _update_account(account_id, session_status="action_required")
+                _update_job(job_id, status="action_required",
+                            error_message=err_msg, completed_at=_now())
+                _log("WARNING",
+                     f"Job #{job_id} ACTION_REQUIRED â€” {err_msg}",
+                     campaign_id=campaign_id, account_id=account_id)
+                return {"outcome": "action_required", "message": err_msg}
+            # transient
+            _update_job(job_id, status="failed", error_message=err_msg,
+                        completed_at=_now())
+            _log("ERROR", f"Job #{job_id} FAILED â€” {err_msg}",
+                 campaign_id=campaign_id, account_id=account_id)
+            return {"outcome": "transient_failure", "message": err_msg}
+
+
+
+
+

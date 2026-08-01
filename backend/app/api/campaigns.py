@@ -1,5 +1,4 @@
-"""Campaign REST endpoints: create, list, detail, upload, lifecycle actions."""
-import shutil
+"""Campaign REST endpoints: create, list, detail, upload, lifecycle, START."""
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,10 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
 from ..database import get_db, BASE_DIR
-from ..models import Campaign, CampaignFile, Job
+from ..models import Account, Campaign, CampaignFile, Job
 from ..schemas import CampaignCreate, CampaignOut, CampaignDetail, CampaignFileOut
 from ..services.logger import log
-from ..services.distribution import estimate_jobs
+from ..services.distribution import estimate_jobs, plan_pairs
+from ..automation.publisher_queue import queue as publisher_queue
 
 router = APIRouter(prefix="/v1/campaigns", tags=["campaigns"])
 
@@ -34,15 +34,15 @@ def _valid_for(content_type: str, filename: str, mime: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Uploads
+# ---------------------------------------------------------------------------
 @router.post("/upload", response_model=List[CampaignFileOut])
 async def upload_files(
     content_type: str = Form(...),
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ):
-    """Upload one or many files. Files are stored on disk and a stub CampaignFile
-    row is created (campaign_id=0) which is later linked when the campaign is
-    finalised via POST /v1/campaigns."""
     if content_type not in ("reel", "static"):
         raise HTTPException(status_code=400, detail="Invalid content_type")
 
@@ -53,7 +53,6 @@ async def upload_files(
                 status_code=400,
                 detail=f"File '{upload.filename}' not allowed for {content_type} campaign",
             )
-        # unique filename on disk to avoid collisions
         ext = Path(upload.filename or "").suffix.lower()
         unique = f"{uuid.uuid4().hex}{ext}"
         dest = UPLOAD_DIR / unique
@@ -84,7 +83,6 @@ async def delete_uploaded_file(file_id: int, db: Session = Depends(get_db)):
     row = db.query(CampaignFile).filter(CampaignFile.id == file_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="File not found")
-    # Only allow deleting orphaned uploads (not yet attached to a campaign)
     if row.campaign_id != 0:
         raise HTTPException(status_code=400, detail="File already attached to a campaign")
     try:
@@ -96,6 +94,9 @@ async def delete_uploaded_file(file_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# Create + list + detail
+# ---------------------------------------------------------------------------
 @router.post("", response_model=CampaignDetail, status_code=201)
 async def create_campaign(payload: CampaignCreate, db: Session = Depends(get_db)):
     if payload.content_type not in ("reel", "static"):
@@ -121,7 +122,6 @@ async def create_campaign(payload: CampaignCreate, db: Session = Depends(get_db)
     db.add(campaign)
     db.flush()
 
-    # Attach uploaded files to this campaign
     rows = (
         db.query(CampaignFile)
         .filter(CampaignFile.id.in_(payload.file_ids), CampaignFile.campaign_id == 0)
@@ -135,15 +135,13 @@ async def create_campaign(payload: CampaignCreate, db: Session = Depends(get_db)
 
     est = estimate_jobs(campaign.distribution_mode, payload.file_ids, campaign.account_quantity)
     log(
-        db,
-        "INFO",
+        db, "INFO",
         f"Campaign #{campaign.id} created — {campaign.content_type}, {len(rows)} file(s), "
         f"{campaign.account_quantity} accounts, mode={campaign.distribution_mode}, est_jobs={est}",
         campaign_id=campaign.id,
     )
     db.commit()
     db.refresh(campaign)
-
     return _serialize_campaign(campaign, db)
 
 
@@ -160,6 +158,26 @@ async def get_campaign(campaign_id: int, db: Session = Depends(get_db)):
     return _serialize_campaign(campaign, db)
 
 
+@router.get("/{campaign_id}/jobs")
+async def list_campaign_jobs(campaign_id: int, db: Session = Depends(get_db)):
+    if not db.query(Campaign).filter(Campaign.id == campaign_id).first():
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    jobs = (
+        db.query(Job)
+        .filter(Job.campaign_id == campaign_id)
+        .order_by(Job.id.asc())
+        .all()
+    )
+    return [{
+        "id": j.id, "account_id": j.account_id, "file_id": j.file_id,
+        "status": j.status, "attempt_count": j.attempt_count,
+        "error_message": j.error_message,
+        "created_at": j.created_at.isoformat() if j.created_at else None,
+        "started_at": j.started_at.isoformat() if j.started_at else None,
+        "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+    } for j in jobs]
+
+
 def _serialize_campaign(campaign: Campaign, db: Session) -> CampaignDetail:
     files = (
         db.query(CampaignFile)
@@ -167,12 +185,8 @@ def _serialize_campaign(campaign: Campaign, db: Session) -> CampaignDetail:
         .order_by(CampaignFile.order_index)
         .all()
     )
-    counts_rows = (
-        db.query(Job.status)
-        .filter(Job.campaign_id == campaign.id)
-        .all()
-    )
-    counts = {"queued": 0, "processing": 0, "successful": 0, "failed": 0}
+    counts_rows = db.query(Job.status).filter(Job.campaign_id == campaign.id).all()
+    counts = {"queued": 0, "running": 0, "success": 0, "failed": 0, "action_required": 0}
     for (status,) in counts_rows:
         counts[status] = counts.get(status, 0) + 1
     counts["total"] = sum(counts.values())
@@ -184,6 +198,105 @@ def _serialize_campaign(campaign: Campaign, db: Session) -> CampaignDetail:
     )
 
 
+# ---------------------------------------------------------------------------
+# START POSTING — materialise jobs + enqueue workers
+# ---------------------------------------------------------------------------
+@router.post("/{campaign_id}/start")
+async def start_campaign(campaign_id: int, db: Session = Depends(get_db)):
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.status not in ("draft",):
+        raise HTTPException(status_code=400, detail=f"Campaign already {campaign.status}")
+
+    files = (
+        db.query(CampaignFile)
+        .filter(CampaignFile.campaign_id == campaign.id)
+        .order_by(CampaignFile.order_index)
+        .all()
+    )
+    if not files:
+        raise HTTPException(status_code=400, detail="Campaign has no files")
+
+    # Find AVAILABLE accounts: enabled + session=connected + not currently busy.
+    # Rotate reasonably by ordering "least recently used first" (nulls first).
+    avail_query = (
+        db.query(Account)
+        .filter(
+            Account.account_status == "enabled",
+            Account.session_status == "connected",
+        )
+        .order_by(Account.last_used_at.asc().nulls_first(), Account.id.asc())
+    )
+    available = avail_query.limit(campaign.account_quantity).all()
+    total_available = avail_query.count()
+
+    if total_available < campaign.account_quantity:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Requested {campaign.account_quantity} accounts but only "
+                f"{total_available} are AVAILABLE (enabled + CONNECTED). "
+                f"Connect more accounts before starting this campaign."
+            ),
+        )
+
+    account_ids = [a.id for a in available]
+    file_ids = [f.id for f in files]
+
+    # Materialise jobs from the distribution plan
+    now = datetime.now(timezone.utc)
+    created_ids: list[int] = []
+    used_account_ids: set[int] = set()
+    for (acc_id, file_id) in plan_pairs(campaign.distribution_mode, file_ids, account_ids):
+        job = Job(
+            campaign_id=campaign.id,
+            account_id=acc_id,
+            file_id=file_id,
+            status="queued",
+        )
+        db.add(job)
+        db.flush()
+        created_ids.append(job.id)
+        used_account_ids.add(acc_id)
+
+    if not created_ids:
+        raise HTTPException(status_code=400, detail="Distribution plan yielded 0 jobs")
+
+    # Reserve the accounts we're about to use
+    (
+        db.query(Account)
+        .filter(Account.id.in_(list(used_account_ids)))
+        .update({Account.session_status: "busy"}, synchronize_session=False)
+    )
+
+    campaign.status = "queued"
+    campaign.started_at = now
+
+    log(db, "INFO",
+        f"Campaign #{campaign.id} started — {len(created_ids)} job(s) queued across "
+        f"{len(used_account_ids)} account(s)",
+        campaign_id=campaign.id)
+    for jid in created_ids:
+        log(db, "INFO", f"Job #{jid} QUEUED", campaign_id=campaign.id)
+
+    db.commit()
+
+    # Fire the worker tasks (in-process, respects semaphore)
+    for jid in created_ids:
+        publisher_queue.enqueue(jid)
+
+    return {
+        "campaign_id": campaign.id,
+        "status": campaign.status,
+        "jobs_created": len(created_ids),
+        "accounts_reserved": len(used_account_ids),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle helpers (existing)
+# ---------------------------------------------------------------------------
 @router.post("/{campaign_id}/pause")
 async def pause_campaign(campaign_id: int, db: Session = Depends(get_db)):
     return _transition(db, campaign_id, "paused", "Campaign paused")
@@ -204,14 +317,21 @@ async def retry_failed(campaign_id: int, db: Session = Depends(get_db)):
     campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
-    updated = (
-        db.query(Job)
-        .filter(Job.campaign_id == campaign_id, Job.status == "failed")
-        .update({"status": "queued", "error_message": ""})
-    )
-    log(db, "INFO", f"Retrying {updated} failed job(s)", campaign_id=campaign_id)
+    # Only failed jobs are retryable — action_required jobs require a manual
+    # reconnect first (spec §9).
+    retry_jobs = db.query(Job).filter(
+        Job.campaign_id == campaign_id, Job.status == "failed"
+    ).all()
+    for j in retry_jobs:
+        j.status = "queued"
+        j.error_message = ""
+        j.attempt_count = 0
+        j.completed_at = None
+    log(db, "INFO", f"Retrying {len(retry_jobs)} failed job(s)", campaign_id=campaign_id)
     db.commit()
-    return {"retried": updated}
+    for j in retry_jobs:
+        publisher_queue.enqueue(j.id)
+    return {"retried": len(retry_jobs)}
 
 
 def _transition(db: Session, campaign_id: int, new_status: str, msg: str):

@@ -41,11 +41,12 @@
     <div class="progress-label" data-testid="progress-label">
       <span id="progress-done">0</span> / <span id="progress-total">0</span> completed
     </div>
-    <ul class="stat-list">
+    <ul class="stat-list stat-list--five">
       <li><span class="stat-num" id="s-queued" data-testid="stat-queued">0</span><span>Queued</span></li>
-      <li><span class="stat-num" id="s-processing" data-testid="stat-processing">0</span><span>Processing</span></li>
-      <li><span class="stat-num stat-num--success" id="s-successful" data-testid="stat-successful">0</span><span>Successful</span></li>
+      <li><span class="stat-num" id="s-running" data-testid="stat-running">0</span><span>Running</span></li>
+      <li><span class="stat-num stat-num--success" id="s-success" data-testid="stat-success">0</span><span>Successful</span></li>
       <li><span class="stat-num stat-num--fail" id="s-failed" data-testid="stat-failed">0</span><span>Failed</span></li>
+      <li><span class="stat-num stat-num--warn" id="s-action-required" data-testid="stat-action-required">0</span><span>Action Req.</span></li>
     </ul>
   </section>
 </div>
@@ -61,10 +62,26 @@
 <section class="card">
   <div class="card-head card-head--simple">
     <h2 class="card-title">Jobs</h2>
-    <span class="muted">Paginated in Phase 3</span>
+    <span class="muted" id="jobs-count">0 job(s)</span>
   </div>
-  <div class="empty-block" data-testid="jobs-empty">
-    Job records will appear here once the queue and workers are enabled (Phase 3).
+  <div class="table-scroll">
+    <table class="data-table" data-testid="jobs-table">
+      <thead>
+        <tr>
+          <th class="col-id">ID</th>
+          <th>Account</th>
+          <th>File</th>
+          <th>Status</th>
+          <th>Attempts</th>
+          <th>Started</th>
+          <th>Completed</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody id="jobs-tbody" data-testid="jobs-tbody">
+        <tr><td colspan="8" class="empty-cell">No jobs yet — click Start Posting on a campaign to create them.</td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 

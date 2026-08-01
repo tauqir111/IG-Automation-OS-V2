@@ -92,6 +92,7 @@ backend/profiles/
 backend/browser_profiles/
 backend/sessions/
 backend/uploads/
+backend/logs/screenshots/
 backend/*.db
 backend/*.sqlite
 backend/*.sqlite3
@@ -102,3 +103,6 @@ backend/**/*.sqlite3
 # Local tooling
 .emergent/
 .gitconfig
+
+# Local patch files
+*.patch

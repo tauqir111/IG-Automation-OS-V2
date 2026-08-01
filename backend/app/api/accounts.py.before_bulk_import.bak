@@ -1,4 +1,4 @@
-﻿"""Account pool management + Instagram session onboarding (Phase 2)."""
+"""Account pool management + Instagram session onboarding (Phase 2)."""
 from pathlib import Path
 from typing import List
 
@@ -8,7 +8,7 @@ from sqlalchemy import func
 
 from ..database import get_db, BASE_DIR
 from ..models import Account
-from ..schemas import AccountOut, AccountCreate, AccountBulkCreate, AccountUpdate
+from ..schemas import AccountOut, AccountCreate, AccountUpdate
 from ..services.logger import log
 from ..automation import browser_session
 
@@ -102,76 +102,10 @@ async def create_account(payload: AccountCreate, db: Session = Depends(get_db)):
     profile_path.mkdir(parents=True, exist_ok=True)
     account.profile_path = str(profile_path)
 
-    log(db, "INFO", f"Account '{name}' added â€” profile {profile_path.name}", account_id=account.id)
+    log(db, "INFO", f"Account '{name}' added — profile {profile_path.name}", account_id=account.id)
     db.commit()
     db.refresh(account)
     return account
-
-
-
-@router.post("/bulk")
-async def bulk_create_accounts(payload: AccountBulkCreate, db: Session = Depends(get_db)):
-    created = []
-    skipped = []
-
-    # Clean + deduplicate usernames from the request.
-    names = []
-    seen = set()
-
-    for raw_name in payload.account_names:
-        name = raw_name.strip().lstrip("@")
-        if not name:
-            continue
-
-        key = name.lower()
-        if key in seen:
-            continue
-
-        seen.add(key)
-        names.append(name)
-
-    if not names:
-        raise HTTPException(status_code=400, detail="No valid account names supplied")
-
-    if len(names) > 10000:
-        raise HTTPException(status_code=400, detail="Maximum 10000 accounts per import")
-
-    for name in names:
-        existing = (
-            db.query(Account)
-            .filter(func.lower(Account.account_name) == name.lower())
-            .first()
-        )
-
-        if existing:
-            skipped.append(name)
-            continue
-
-        account = Account(
-            account_name=name,
-            profile_path="",
-            session_status="unknown",
-            account_status="enabled",
-        )
-
-        db.add(account)
-        db.flush()
-
-        profile_path = PROFILES_DIR / f"account_{account.id:04d}"
-        profile_path.mkdir(parents=True, exist_ok=True)
-        account.profile_path = str(profile_path)
-
-        created.append(name)
-
-    db.commit()
-
-    return {
-        "requested": len(names),
-        "created": len(created),
-        "skipped": len(skipped),
-        "created_accounts": created,
-        "skipped_accounts": skipped,
-    }
 
 
 @router.patch("/{account_id}", response_model=AccountOut)
@@ -183,7 +117,7 @@ async def update_account(account_id: int, payload: AccountUpdate, db: Session = 
         if payload.account_status not in ("enabled", "disabled"):
             raise HTTPException(status_code=400, detail="Invalid account_status")
         account.account_status = payload.account_status
-        log(db, "INFO", f"Account '{account.account_name}' â†’ {payload.account_status}", account_id=account.id)
+        log(db, "INFO", f"Account '{account.account_name}' → {payload.account_status}", account_id=account.id)
     if payload.session_status is not None:
         if payload.session_status not in VALID_SESSION_STATUSES:
             raise HTTPException(status_code=400, detail="Invalid session_status")
@@ -228,7 +162,7 @@ async def connect_instagram(account_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{account_id}/verify")
 async def verify_session(account_id: int, db: Session = Depends(get_db)):
-    """Headless check of the account's persistent profile â€” updates session_status."""
+    """Headless check of the account's persistent profile — updates session_status."""
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -240,6 +174,5 @@ async def verify_session(account_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{account_id}/open-session")
 async def open_session(account_id: int, db: Session = Depends(get_db)):
-    """Alias for connect â€” opens the persistent-profile browser."""
+    """Alias for connect — opens the persistent-profile browser."""
     return await connect_instagram(account_id, db)
-

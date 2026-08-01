@@ -1,4 +1,4 @@
-﻿"""Pydantic schemas for API I/O."""
+"""Pydantic schemas for API I/O."""
 from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict
@@ -18,10 +18,6 @@ class AccountOut(BaseModel):
 
 class AccountCreate(BaseModel):
     account_name: str = Field(min_length=1, max_length=255)
-
-
-class AccountBulkCreate(BaseModel):
-    account_names: List[str]
 
 
 class AccountUpdate(BaseModel):

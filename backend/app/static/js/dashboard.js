@@ -289,7 +289,16 @@
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      toast(`Campaign #${campaign.id} created`, 'success');
+      // Phase 2: also kick off the real publishing engine.
+      try {
+        const startRes = await api(`/v1/campaigns/${campaign.id}/start`, { method: 'POST' });
+        toast(`Campaign #${campaign.id} started — ${startRes.jobs_created} job(s) queued`, 'success');
+      } catch (startErr) {
+        toast(
+          `Campaign #${campaign.id} created but not started: ${startErr.message}`,
+          'warn'
+        );
+      }
       closeModal();
       setTimeout(() => { window.location.href = `/api/campaigns/${campaign.id}`; }, 500);
     } catch (err) {
