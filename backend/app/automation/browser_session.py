@@ -209,7 +209,7 @@ async def connect_account(account_id: int, timeout_minutes: int = 30) -> dict:
     if lock.locked() or is_active(account_id):
         return {"ok": False, "message": "A session is already in progress for this account."}
 
-    async def _worker():
+    async def _worker():     print("######## WORKER STARTED ########", flush=True)      async with lock:
         async with lock:
             # 1) Load account + set status
             db = SessionLocal()
@@ -319,7 +319,7 @@ async def verify_account(account_id: int) -> dict:
     if lock.locked() or is_active(account_id):
         return {"ok": False, "message": "A session is already in progress for this account."}
 
-    async def _worker():
+    async def _worker():     print("######## WORKER STARTED ########", flush=True)      async with lock:
         async with lock:
             db = SessionLocal()
             profile_path: Optional[Path] = None
