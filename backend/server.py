@@ -1,4 +1,4 @@
-﻿"""IG Automation OS â€” FastAPI entrypoint.
+"""IG Automation OS — FastAPI entrypoint.
 
 All routes (pages + REST) are mounted under `/api` because the platform
 ingress only forwards paths beginning with `/api` to this backend.
@@ -89,14 +89,14 @@ async def on_startup():
     stats = recover_on_startup()
     if stats["jobs_marked_action_required"] or stats["accounts_released"]:
         logger.warning(
-            "Recovered from prior crash â€” jobsâ†’ACTION_REQUIRED: %d, accounts released: %d",
+            "Recovered from prior crash — jobs→ACTION_REQUIRED: %d, accounts released: %d",
             stats["jobs_marked_action_required"], stats["accounts_released"],
         )
 
     # 2) Configure the publisher queue from Settings (concurrent_workers).
     publisher_queue.configure(_read_max_concurrent())
     logger.info(
-        "IG Automation OS ready â€” SQLite initialised, publisher concurrency=%d",
+        "IG Automation OS ready — SQLite initialised, publisher concurrency=%d",
         publisher_queue.max_concurrent,
     )
 

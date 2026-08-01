@@ -263,30 +263,108 @@ async def _perform_publish(page, content_type: str, media_path: str, caption: st
     await create.click(timeout=15000)
     await asyncio.sleep(1)
 
-    # ---- 2) If Reel, click the "Reel" submenu; else pick "Post" -------------
-    if content_type == "reel":
+    # ---- 2) Universal Create-flow detector ---------------------------------
+    # Instagram shows different UIs after clicking "+":
+    #   A) direct Reel creator (file input already available)
+    #   B) direct Post creator (file input already available)
+    #   C) Create menu with "Post / Live video / Ad / AI" (NO Reel button here)
+    #   D) Create menu with "Post" and "Reel" side-by-side
+    #   E) direct file picker (input already available)
+    #
+    # Universal priority (works for BOTH reel and static campaigns —
+    # the Post creator accepts video and Instagram auto-treats a vertical
+    # video as a Reel, so we NEVER guess Reel first):
+    #   1. If a file input is already reachable -> upload immediately.
+    #   2. Else if a "Post" button is visible in the current UI -> click Post.
+    #   3. Else if a "Reel" button is visible          -> click Reel.
+    #   4. Else if a "Select from computer" button is visible -> click it.
+    #   5. Else -> screenshot + log visible buttons/text + fail gracefully.
+    #
+    # We NEVER assume Reel just because content_type == "reel".
+    await asyncio.sleep(0.8)  # give the menu/creator a moment to fully render
+
+    post_selectors = [
+        '[aria-label="Post"]',
+        'div[role="button"]:has-text("Post")',
+        'a:has-text("Post")',
+        'span:has-text("Post")',
+    ]
+    reel_selectors = [
+        'a[href*="/reels/create"]',
+        '[aria-label="Reel"]',
+        'div[role="button"]:has-text("Reel")',
+        'span:has-text("Reel")',
+    ]
+    select_from_computer_selectors = [
+        'button:has-text("Select from computer")',
+        'div[role="button"]:has-text("Select from computer")',
+    ]
+
+    async def _uploader_reachable():
         try:
-            await _click_first(page, [
-                'a[href*="/reels/create"]',
-                'span:has-text("Reel")',
-                'div[role="button"]:has-text("Reel")',
-                '[aria-label="Reel"]',
-            ], timeout_ms=4000)
-            await asyncio.sleep(1)
+            return await page.locator('input[type="file"]').count() > 0
         except Exception:
-            # No submenu (some IG accounts land straight in Create modal
-            # that auto-detects video as a Reel). Continue.
-            pass
-    else:
+            return False
+
+    async def _first_visible_click(selectors):
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    await loc.click(timeout=1500)
+                    _log("INFO", f"Job #{job_id} - advanced Create flow via {sel!r}")
+                    return True
+            except Exception:
+                continue
+        return False
+
+    reached_uploader = False
+    for step in range(6):
+        if await _uploader_reachable():
+            reached_uploader = True
+            break
+        # Priority per spec: Post first, then Reel, then "Select from computer"
+        if await _first_visible_click(post_selectors):
+            await asyncio.sleep(0.8)
+            continue
+        if await _first_visible_click(reel_selectors):
+            await asyncio.sleep(0.8)
+            continue
+        if await _first_visible_click(select_from_computer_selectors):
+            await asyncio.sleep(0.8)
+            continue
+        # Nothing clickable and no uploader yet -> give up
+        break
+
+    if not reached_uploader:
+        # Diagnostics: screenshot + log visible buttons/text so we can add another fallback
+        visible_text = ""
         try:
-            await _click_first(page, [
-                'span:has-text("Post")',
-                'div[role="button"]:has-text("Post")',
-                '[aria-label="Post"]',
-            ], timeout_ms=4000)
-            await asyncio.sleep(1)
-        except Exception:
-            pass
+            btns = await page.locator('button, [role="button"], a[role="link"]').all()
+            texts = []
+            for b in btns[:40]:
+                try:
+                    if await b.is_visible():
+                        t = (await b.inner_text(timeout=800))[:60].strip()
+                        if t and t not in texts:
+                            texts.append(t)
+                    if len(texts) >= 15:
+                        break
+                except Exception:
+                    continue
+            visible_text = " | ".join(texts) if texts else "(no visible buttons)"
+        except Exception as e:
+            visible_text = f"(diagnostic error: {type(e).__name__})"
+        await _safe_screenshot(page, _screenshot_path(job_id, "no_uploader"))
+        _log(
+            "ERROR",
+            f"Job #{job_id} - could not reach uploader after Create. "
+            f"Visible buttons: {visible_text}",
+        )
+        raise RuntimeError(
+            "Could not reach Instagram uploader after clicking Create. "
+            f"Visible buttons/text: {visible_text}"
+        )
 
     # ---- 3) Upload the file via hidden input --------------------------------
     _log("INFO", f"Job #{job_id} â€” uploading media ({Path(media_path).name})")

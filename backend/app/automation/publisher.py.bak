@@ -263,30 +263,89 @@ async def _perform_publish(page, content_type: str, media_path: str, caption: st
     await create.click(timeout=15000)
     await asyncio.sleep(1)
 
-    # ---- 2) If Reel, click the "Reel" submenu; else pick "Post" -------------
+    # ---- 2) Universal Create-flow detector ---------------------------------
+    # Instagram shows different UIs after clicking "+":
+    #   A) direct Reel creator (file input already available)
+    #   B) direct Post creator (file input already available)
+    #   C) Create dialog with a Post/Reel button that must be clicked
+    #   D) direct file picker (input already available)
+    # We loop up to 6 times: if the file input is already reachable, we're done;
+    # otherwise click whichever advance option is visible and try again.
     if content_type == "reel":
-        try:
-            await _click_first(page, [
-                'a[href*="/reels/create"]',
-                'span:has-text("Reel")',
-                'div[role="button"]:has-text("Reel")',
-                '[aria-label="Reel"]',
-            ], timeout_ms=4000)
-            await asyncio.sleep(1)
-        except Exception:
-            # No submenu (some IG accounts land straight in Create modal
-            # that auto-detects video as a Reel). Continue.
-            pass
+        advance_selectors = [
+            'a[href*="/reels/create"]',
+            '[aria-label="Reel"]',
+            'div[role="button"]:has-text("Reel")',
+            'span:has-text("Reel")',
+        ]
     else:
+        advance_selectors = [
+            '[aria-label="Post"]',
+            'div[role="button"]:has-text("Post")',
+            'span:has-text("Post")',
+        ]
+    # "Select from computer" appears once we're inside the creator on some accounts
+    advance_selectors += [
+        'button:has-text("Select from computer")',
+        'div[role="button"]:has-text("Select from computer")',
+    ]
+
+    async def _uploader_reachable():
         try:
-            await _click_first(page, [
-                'span:has-text("Post")',
-                'div[role="button"]:has-text("Post")',
-                '[aria-label="Post"]',
-            ], timeout_ms=4000)
-            await asyncio.sleep(1)
+            return await page.locator('input[type="file"]').count() > 0
         except Exception:
-            pass
+            return False
+
+    reached_uploader = False
+    for step in range(6):
+        if await _uploader_reachable():
+            reached_uploader = True
+            break
+        clicked_something = False
+        for sel in advance_selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    await loc.click(timeout=1500)
+                    _log("INFO", f"Job #{job_id} - advanced Create flow via {sel!r}")
+                    clicked_something = True
+                    break
+            except Exception:
+                continue
+        if not clicked_something:
+            # Nothing to advance and no uploader yet -> give up
+            break
+        await asyncio.sleep(0.8)
+
+    if not reached_uploader:
+        # Diagnostics: screenshot + log visible buttons/text so we can add another fallback
+        visible_text = ""
+        try:
+            btns = await page.locator('button, [role="button"], a[role="link"]').all()
+            texts = []
+            for b in btns[:40]:
+                try:
+                    if await b.is_visible():
+                        t = (await b.inner_text(timeout=800))[:60].strip()
+                        if t and t not in texts:
+                            texts.append(t)
+                    if len(texts) >= 15:
+                        break
+                except Exception:
+                    continue
+            visible_text = " | ".join(texts) if texts else "(no visible buttons)"
+        except Exception as e:
+            visible_text = f"(diagnostic error: {type(e).__name__})"
+        await _safe_screenshot(page, _screenshot_path(job_id, "no_uploader"))
+        _log(
+            "ERROR",
+            f"Job #{job_id} - could not reach uploader after Create. "
+            f"Visible buttons: {visible_text}",
+        )
+        raise RuntimeError(
+            "Could not reach Instagram uploader after clicking Create. "
+            f"Visible buttons/text: {visible_text}"
+        )
 
     # ---- 3) Upload the file via hidden input --------------------------------
     _log("INFO", f"Job #{job_id} â€” uploading media ({Path(media_path).name})")
