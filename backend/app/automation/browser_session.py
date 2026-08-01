@@ -321,8 +321,10 @@ async def verify_account(account_id: int) -> dict:
     if lock.locked() or is_active(account_id):
         return {"ok": False, "message": "A session is already in progress for this account."}
 
-    async def _worker():     print("######## WORKER STARTED ########", flush=True)      async with lock:
-        async with lock:
+    async def _worker():
+    print("######## VERIFY WORKER STARTED ########", flush=True)
+
+    async with lock:
             db = SessionLocal()
             profile_path: Optional[Path] = None
             account_name = ""
